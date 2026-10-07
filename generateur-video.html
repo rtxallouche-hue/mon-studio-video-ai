@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mon studio vidéo IA</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap">
+<style>
+  :root{--bg:#eef2fa;--ink:#101b4b;--mute:#5a6590;--acc:#2f4bff;--line:#c9d2ea;--card:#fff}
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;line-height:1.5;padding:24px 16px 48px}
+  main{max-width:720px;margin:0 auto}
+  h1{font-size:clamp(2rem,7vw,3.2rem);font-weight:800;letter-spacing:-.03em;line-height:1.05;margin:8px 0 6px}
+  p.sub{color:var(--mute);margin:0 0 24px;max-width:52ch}
+  .frame{aspect-ratio:16/9;background:var(--ink);border-radius:6px;display:grid;place-items:center;overflow:hidden;position:relative;border:6px solid var(--ink);outline:2px solid var(--line)}
+  .frame video{width:100%;height:100%;object-fit:contain;background:#000}
+  .idle{color:#8d9acb;text-align:center;padding:16px}
+  .count{font-size:clamp(3rem,16vw,6rem);font-weight:800;color:#fff;font-variant-numeric:tabular-nums}
+  .count small{display:block;font-size:.9rem;font-weight:400;color:#8d9acb}
+  label{display:block;font-weight:600;margin:20px 0 6px}
+  textarea,input{width:100%;font:inherit;color:var(--ink);background:var(--card);border:1.5px solid var(--line);border-radius:6px;padding:12px}
+  textarea{min-height:110px;resize:vertical}
+  textarea:focus,input:focus,button:focus-visible,summary:focus-visible{outline:3px solid var(--acc);outline-offset:1px}
+  button.go{margin-top:16px;width:100%;font:inherit;font-weight:800;font-size:1.1rem;background:var(--acc);color:#fff;border:0;border-radius:6px;padding:14px;cursor:pointer}
+  button.go:disabled{opacity:.55;cursor:wait}
+  #msg{margin-top:12px;min-height:1.5em;color:var(--mute)}
+  #msg.err{color:#b3261e}
+  details{margin-top:24px;border-top:1px solid var(--line);padding-top:12px}
+  summary{cursor:pointer;font-weight:600}
+  .hint{font-size:.88rem;color:var(--mute);margin:6px 0 0}
+  a.dl{display:inline-block;margin-top:10px;color:var(--acc);font-weight:600}
+  @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Écris une scène, regarde-la tourner.</h1>
+  <p class="sub">Décris la vidéo que tu veux. Elle est générée gratuitement par un modèle open source hébergé sur Hugging Face.</p>
+
+  <div class="frame" id="frame"><div class="idle">Ta vidéo apparaîtra ici</div></div>
+
+  <label for="prompt">Ton prompt</label>
+  <textarea id="prompt" placeholder="Un renard roux traverse une forêt enneigée au lever du soleil, caméra qui suit en travelling"></textarea>
+
+  <button class="go" id="go">Générer la vidéo</button>
+  <div id="msg" role="status" aria-live="polite"></div>
+
+  <details>
+    <summary>Réglages</summary>
+    <label for="space">Space Hugging Face</label>
+    <input id="space" value="Lightricks/LTX-2-3">
+    <label for="api">Nom de l'endpoint</label>
+    <input id="api" value="/generate_video">
+    <label for="param">Nom du paramètre prompt</label>
+    <input id="param" value="prompt">
+    <label for="token">Token Hugging Face (optionnel)</label>
+    <input id="token" type="password" placeholder="hf_...">
+    <p class="hint">Un token gratuit (huggingface.co/settings/tokens) augmente ton quota quotidien. Si un Space change ou disparaît, remplace son nom ici : la page « Use via API » du Space indique l'endpoint et les paramètres.</p>
+  </details>
+</main>
+
+<script type="module">
+import { Client } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+
+const $ = id => document.getElementById(id);
+const frame = $("frame"), msg = $("msg"), go = $("go");
+let timer;
+
+function say(t, err = false){ msg.textContent = t; msg.className = err ? "err" : ""; }
+
+function startCount(){
+  let s = 0;
+  frame.innerHTML = '<div class="count"><span id="n">0</span><small>secondes, la génération peut durer plusieurs minutes</small></div>';
+  timer = setInterval(() => { s++; const n = $("n"); if (n) n.textContent = s; }, 1000);
+}
+function stopCount(){ clearInterval(timer); }
+
+function findVideoUrl(data){
+  for (const d of data || []){
+    if (!d) continue;
+    if (typeof d === "string" && d.startsWith("http")) return d;
+    if (d.url) return d.url;
+    if (d.video && d.video.url) return d.video.url;
+  }
+  return null;
+}
+
+go.addEventListener("click", async () => {
+  const prompt = $("prompt").value.trim();
+  if (!prompt){ say("Écris d'abord un prompt.", true); return; }
+  go.disabled = true;
+  say("Connexion au modèle…");
+  startCount();
+  try {
+    const token = $("token").value.trim();
+    const app = await Client.connect($("space").value.trim(), token ? { token: token } : {});
+    say("Génération en cours, garde cette page ouverte.");
+    const result = await app.predict($("api").value.trim(), { [$("param").value.trim()]: prompt });
+    const url = findVideoUrl(result.data);
+    if (!url) throw new Error("Aucune vidéo reçue. Vérifie l'endpoint et le paramètre dans les réglages.");
+    stopCount();
+    frame.innerHTML = "";
+    const v = document.createElement("video");
+    v.src = url; v.controls = true; v.autoplay = true; v.loop = true; v.playsInline = true;
+    frame.appendChild(v);
+    msg.innerHTML = 'Vidéo prête. <a class="dl" href="' + url + '" target="_blank" rel="noopener" download>Télécharger</a>';
+    msg.className = "";
+  } catch (e) {
+    stopCount();
+    frame.innerHTML = '<div class="idle">Ta vidéo apparaîtra ici</div>';
+    const m = (e && (e.message || e.detail)) || "Erreur inconnue";
+    say("Échec : " + m + ". Si c'est un quota dépassé, réessaie plus tard ou ajoute un token.", true);
+  } finally {
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
